@@ -5,71 +5,69 @@ import os
 import time
 from binance.client import Client
 
-# --- 1. جلب جميع المفاتيح من Render (أمان 100%) ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# --- الإعدادات الأمنية ---
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 BINANCE_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET = os.getenv("BINANCE_API_SECRET")
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+# إنشاء كائن البوت
+bot = telebot.TeleBot(TOKEN)
 
-# إعداد اتصال بينانس (بشكل آمن)
+# إعداد اتصال بينانس
 try:
     binance_client = Client(BINANCE_KEY, BINANCE_SECRET)
-except Exception as e:
+except:
     binance_client = None
 
-# --- 2. واجهة الموقع (Streamlit) لتعرف حالة السيرفر ---
-st.set_page_config(page_title="Nasser Trading Bot", page_icon="📈")
-st.title("🤖 منصة ناصر للتداول الذكي")
+# --- واجهة المستخدم (Streamlit) ---
+st.set_page_config(page_title="منصة ناصر للتداول", page_icon="📈")
+st.title("🤖 نظام التداول الذكي لـ ناصر")
 st.markdown("---")
 
-# عرض حالة الاتصال في الجانب
-st.sidebar.header("لوحة التحكم")
+st.sidebar.header("📊 حالة الأنظمة")
 if binance_client:
-    st.sidebar.success("✅ متصل ببينانس")
+    st.sidebar.success("بينانس: متصل ✅")
     try:
-        # عرض رصيد USDT سريع في الموقع
-        res = binance_client.get_asset_balance(asset='USDT')
-        st.sidebar.metric("رصيد USDT الحالي", f"${res['free']}")
+        balance = binance_client.get_asset_balance(asset='USDT')
+        st.sidebar.metric("رصيد USDT", f"${balance['free']}")
     except:
-        st.sidebar.warning("⚠️ لا يمكن جلب الرصيد حالياً")
+        st.sidebar.warning("تعذر جلب الرصيد")
 else:
-    st.sidebar.error("❌ غير متصل ببينانس")
+    st.sidebar.error("بينانس: غير متصل ❌")
 
-# --- 3. أوامر التليجرام (المخ) ---
+# --- محرك التليجرام ---
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً ناصر! البوت يعمل الآن بقوة.\n\nاستخدم الأوامر التالية:\n💰 /balance - لعرض الرصيد\n📊 /price BTC - لمعرفة سعر البيتكوين")
+    bot.reply_to(message, "أهلاً ناصر! البوت يعمل الآن بأقصى احترافية.\n\nاستخدم /balance لعرض أرصدتك الحقيقية.")
 
 @bot.message_handler(commands=['balance'])
-def get_balance(message):
+def show_balance(message):
     if not binance_client:
-        bot.reply_to(message, "❌ المفاتيح غير موجودة في إعدادات Render.")
+        bot.reply_to(message, "⚠️ مفاتيح بينانس غير مبرمجة في Render.")
         return
-    
     try:
-        # جلب الأرصدة الحقيقية فقط
         account = binance_client.get_account()
-        balances = [f"🔸 {b['asset']}: {b['free']}" for b in account['balances'] if float(b['free']) > 0.0001]
-        
-        if balances:
-            response = "💰 **أرصدتك المتوفرة:**\n\n" + "\n".join(balances)
-        else:
-            response = "💰 المحفظة لا تحتوي على أرصدة حالياً."
-        
-        bot.reply_to(message, response, parse_mode="Markdown")
+        assets = [f"💰 {b['asset']}: {b['free']}" for b in account['balances'] if float(b['free']) > 0.001]
+        msg = "**أرصدتك الحالية:**\n\n" + "\n".join(assets) if assets else "المحفظة فارغة."
+        bot.reply_to(message, msg, parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ فشل جلب الرصيد: {e}")
+        bot.reply_to(message, f"❌ خطأ: {e}")
 
-# --- 4. تشغيل النظام ---
-def run_bot():
-    try:
-        bot.infinity_polling()
-    except:
-        time.sleep(5)
+# دالة تشغيل البوت مع معالجة خطأ التصادم (Conflict)
+def start_bot():
+    while True:
+        try:
+            bot.remove_webhook() # تنظيف أي اتصال قديم
+            print("جاري بدء البوت...")
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception as e:
+            print(f"إعادة محاولة بسبب: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    # تشغيل تليجرام في الخلفية
-    threading.Thread(target=run_bot, daemon=True).start()
-    st.write("✨ النظام يعمل الآن ومستعد لتلقي الأوامر.")
+    # تشغيل البوت في خلفية السيرفر
+    t = threading.Thread(target=start_bot)
+    t.daemon = True
+    t.start()
+    st.write("✨ جميع الأنظمة تعمل الآن بصمت في الخلفية.")
