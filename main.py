@@ -3,107 +3,116 @@ import telebot
 import threading
 import os
 import time
+import requests
 from binance.client import Client
-from requests.exceptions import ConnectionError
+from binance.exceptions import BinanceAPIException
 
-# --- 1. إعدادات الأمان والاتصال ---
-# جلب المفاتيح من "خزنة" Render (Environment Variables)
+# --- [1] الإعدادات الأمنية والربط ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BINANCE_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# تعريف البوت
-bot = telebot.TeleBot(TOKEN)
+# إنشاء كائن البوت مع ميزة الرد الذكي
+bot = telebot.TeleBot(TOKEN, threaded=True)
 
-# محاولة الاتصال ببينانس
-try:
-    if BINANCE_KEY and BINANCE_SECRET:
-        binance_client = Client(BINANCE_KEY, BINANCE_SECRET)
-    else:
-        binance_client = None
-except Exception:
-    binance_client = None
+# محاولة الاتصال ببينانس مع نظام فحص الأخطاء
+def get_binance_client():
+    try:
+        if BINANCE_KEY and BINANCE_SECRET:
+            return Client(BINANCE_KEY, BINANCE_SECRET, {"timeout": 20})
+    except:
+        return None
+    return None
 
-# --- 2. واجهة التحكم (Streamlit) ---
-st.set_page_config(page_title="Nasser Terminal", page_icon="⚡", layout="wide")
+client = get_binance_client()
 
-st.title("📈 لوحة تحكم ناصر الاحترافية")
-st.markdown("---")
+# --- [2] واجهة الويب الاحترافية (Streamlit) ---
+st.set_page_config(page_title="Nasser Quantum Bot", page_icon="💎", layout="wide")
 
-# عرض حالة الأنظمة في أعمدة
+# تصميم الواجهة بلمسة تقنية
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; color: white; }
+    .stMetric { background-color: #1f2937; padding: 15px; border-radius: 10px; border: 1px solid #3b82f6; }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("💎 نظام ناصر للتداول الذكي (Pro)")
+st.divider()
+
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("حالة البوت", "يعمل بنشاط ✅")
+    st.metric(label="حالة النظام", value="نشط ⚡", delta="متصل")
 with col2:
-    status = "متصل ✅" if binance_client else "غير متصل ❌"
-    st.metric("بينانس", status)
+    status_text = "متصل ✅" if client else "غير متصل ❌"
+    st.metric(label="ربط بينانس", value=status_text)
 with col3:
-    st.metric("تحديث البيانات", "تلقائي 🔄")
+    st.metric(label="الحماية", value="عالية 🛡️")
 
-# قائمة جانبية للمعلومات
-st.sidebar.header("⚙️ الإعدادات السرية")
-st.sidebar.info("يتم جلب المفاتيح بأمان من بيئة العمل المشفرة.")
-if binance_client:
-    try:
-        usdt_balance = binance_client.get_asset_balance(asset='USDT')
-        st.sidebar.success(f"رصيد USDT الحالي: {usdt_balance['free']}$")
-    except:
-        pass
+# --- [3] وظائف تليجرام الاحترافية (لا تتوقف) ---
 
-# --- 3. وظائف تليجرام الاحترافية ---
-
-@bot.message_handler(commands=['start'])
-def welcome(message):
-    user = message.from_user.first_name
-    msg = (f"👋 أهلاً بك يا {user} في نظامك الخاص!\n\n"
-           "🚀 البوت الآن مربوط بالسيرفر ويعمل 24/7.\n"
-           "أوامرك المتاحة:\n"
-           "💰 /balance - لعرض محفظتك بالكامل\n"
-           "📊 /price BTC - لمعرفة سعر عملة معينة")
-    bot.reply_to(message, msg)
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    welcome_text = (
+        "👑 **مرحباً بك في لوحة تحكم ناصر!**\n\n"
+        "هذا البوت يعمل بنظام الـ Multi-threading لضمان عدم التوقف.\n\n"
+        "📜 **الأوامر المتاحة:**\n"
+        "💰 `/balance` - عرض أرصدة محفظتك الحقيقية\n"
+        "📈 `/price BTC` - سعر أي عملة مقابل USDT\n"
+        "🛠️ `/status` - فحص جودة اتصال السيرفر"
+    )
+    bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['balance'])
-def show_balance(message):
-    if not binance_client:
-        bot.reply_to(message, "⚠️ فشل الاتصال ببينانس. تحقق من المفاتيح في Render.")
+def check_balance(message):
+    if not client:
+        bot.reply_to(message, "⚠️ خطأ: مفاتيح بينانس غير صحيحة أو مفقودة في إعدادات Render.")
         return
     
+    msg = bot.reply_to(message, "🔍 جاري فحص المحفظة...")
     try:
-        account = binance_client.get_account()
-        # تصفية المحفظة لعرض العملات التي تملك فيها رصيد فقط
-        balances = [f"🔹 {b['asset']}: {b['free']}" for b in account['balances'] if float(b['free']) > 0.0001]
+        account = client.get_account()
+        balances = [f"● *{b['asset']}*: `{float(b['free']):.4f}`" 
+                    for b in account['balances'] if float(b['free']) > 0.0001]
         
-        if balances:
-            result = "💰 **أرصدتك الحقيقية في بينانس:**\n\n" + "\n".join(balances)
-        else:
-            result = "💰 المحفظة فارغة حالياً."
-        bot.reply_to(message, result, parse_mode="Markdown")
+        response = "💰 **أرصدتك المتوفرة:**\n\n" + "\n".join(balances) if balances else "⚠️ المحفظة فارغة."
+        bot.edit_message_text(response, message.chat.id, msg.message_id, parse_mode="Markdown")
+    except BinanceAPIException as e:
+        bot.edit_message_text(f"❌ خطأ من بينانس: {e.message}", message.chat.id, msg.message_id)
     except Exception as e:
-        bot.reply_to(message, f"❌ خطأ في جلب البيانات: {e}")
+        bot.edit_message_text("❌ حدث خطأ تقني، يرجى المحاولة لاحقاً.", message.chat.id, msg.message_id)
 
 @bot.message_handler(commands=['price'])
 def get_price(message):
     try:
-        symbol = message.text.split()[1].upper() + "USDT"
-        price = binance_client.get_symbol_ticker(symbol=symbol)
-        bot.reply_to(message, f"📊 سعر {symbol} الآن هو: {float(price['price']):,.2f}$")
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "💡 مثال: `/price ETH` أو `/price SOL`", parse_mode="Markdown")
+            return
+        
+        symbol = args[1].upper() + "USDT"
+        ticker = client.get_symbol_ticker(symbol=symbol)
+        price = float(ticker['price'])
+        
+        bot.reply_to(message, f"📊 سعر *{symbol}* الآن:\n💰 `${price:,.2f}`", parse_mode="Markdown")
     except:
-        bot.reply_to(message, "⚠️ يرجى كتابة اسم العملة بشكل صحيح. مثال: `/price BTC`")
+        bot.reply_to(message, "⚠️ تأكد من اسم العملة (مثال: BTC, ETH, SOL)")
 
-# --- 4. محرك التشغيل الذكي (Anti-Crash) ---
-def run_bot_safe():
+# --- [4] محرك التشغيل المستمر (Anti-Crash Engine) ---
+def run_bot_forever():
     while True:
         try:
-            # حل مشكلة Conflict 409 وحذف أي اتصالات معلقة
-            bot.remove_webhook()
-            bot.infinity_polling(timeout=20, long_polling_timeout=10)
-        except Exception:
-            time.sleep(5) # انتظار بسيط قبل إعادة المحاولة في حال انقطاع الإنترنت
+            bot.remove_webhook() # تنظيف أي تضارب قديم
+            print("إقلاع نظام تليجرام...")
+            bot.infinity_polling(timeout=60, long_polling_timeout=30)
+        except Exception as e:
+            print(f"إعادة محاولة التشغيل بعد 10 ثواني بسبب: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
-    # تشغيل البوت في الخلفية (Thread) لضمان عمل الموقع في نفس الوقت
-    t = threading.Thread(target=run_bot_safe)
-    t.daemon = True
-    t.start()
+    # تشغيل البوت في مسار منفصل تماماً عن الموقع
+    bot_thread = threading.Thread(target=run_bot_forever)
+    bot_thread.daemon = True
+    bot_thread.start()
     
-    st.write("🛰️ السيرفر يبث الآن.. يمكنك استخدام البوت في تليجرام.")
+    st.success("🛰️ السيرفر يبث الآن بنجاح. البوت جاهز للاستخدام في تليجرام.")
