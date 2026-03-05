@@ -7,135 +7,69 @@ from binance.client import Client
 from binance.exceptions import BinanceAPIException
 from requests.exceptions import ConnectionError, ReadTimeout
 
-# ==========================================
-# [1] إدارة الهوية والأمان (Zero-Leak Security)
-# ==========================================
+# 1. إعدادات الهوية والأمان
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# إعداد البوت مع محرك معالجة متوازي (High-Speed)
-bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=40)
+# إنشاء كائن البوت مع ميزة تعدد المسارات
+bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=20)
 
-# ==========================================
-# [2] ذكاء الاتصال (Smart Connection Engine)
-# ==========================================
-class NasserIntelligence:
+# 2. محرك الاتصال ببينانس مع نظام "إعادة المحاولة الذكي"
+class BinanceEngine:
     def __init__(self):
-        self.client = self.refresh_connection()
+        self.client = self.connect()
 
-    def refresh_connection(self):
-        """محاولة إنشاء اتصال مستقر ومفحوص"""
-        if not API_KEY or not API_SECRET:
-            return None
+    def connect(self):
+        if not API_KEY or not API_SECRET: return None
         try:
-            # مهلة انتظار طويلة (60 ثانية) لتناسب السيرفرات المجانية
             c = Client(API_KEY, API_SECRET, {"timeout": 60})
             c.get_account_status()
             return c
-        except:
-            return None
+        except: return None
 
-    def get_data_safely(self):
-        """جلب البيانات مع نظام المحاولات الذكية (Retry System)"""
-        if not self.client:
-            self.client = self.refresh_connection()
-        
-        for _ in range(3): # يحاول 3 مرات قبل أن يستسلم
-            try:
-                acc = self.client.get_account()
-                return [b for b in acc['balances'] if float(b['free']) > 0.0001]
-            except (BinanceAPIException, ConnectionError, ReadTimeout):
-                time.sleep(3)
-                self.client = self.refresh_connection()
-        return None
+    def get_balance(self):
+        if not self.client: self.client = self.connect()
+        try:
+            acc = self.client.get_account()
+            return [b for b in acc['balances'] if float(b['free']) > 0.0001]
+        except: return None
 
-# تشغيل المحرك الذكي
-nasser_engine = NasserIntelligence()
+engine = BinanceEngine()
 
-# ==========================================
-# [3] واجهة المستخدم الاحترافية (Elite Dashboard)
-# ==========================================
-st.set_page_config(page_title="Nasser Smart Terminal", layout="wide")
+# 3. واجهة التحكم (Streamlit)
+st.set_page_config(page_title="Nasser OS", layout="wide")
+st.title("🛡️ نظام ناصر الفائق")
 
-# تصميم واجهة مستخدم مظلمة واحترافية
-st.markdown("""
-    <style>
-    .stApp { background-color: #0b0e11; color: white; }
-    .metric-card { background-color: #1e2329; border-radius: 10px; padding: 20px; border: 1px solid #f0b90b; }
-    </style>
-    """, unsafe_allow_html=True)
+if engine.client:
+    st.success("✅ بينانس: متصل")
+else:
+    st.error("❌ بينانس: غير متصل (تحقق من المفاتيح في Render)")
 
-st.title("⚡ نظام ناصر الذكي للتحكم الفائق")
-st.write("---")
-
-col1, col2 = st.columns(2)
-with col1:
-    st.info("🤖 **حالة البوت:** نشط ويعمل في الخلفية")
-with col2:
-    if nasser_engine.client:
-        st.success("🔗 **بينانس:** متصلة بالكامل (API Active)")
-    else:
-        st.error("🔗 **بينانس:** غير متصلة (تحقق من المفاتيح في Render)")
-
-# ==========================================
-# [4] أوامر تليجرام الذكية (Ultra Response)
-# ==========================================
-
+# 4. أوامر تليجرام المستقرة
 @bot.message_handler(commands=['start'])
-def start_cmd(message):
-    welcome = (
-        f"👑 **مرحباً بك يا سيد ناصر!**\n\n"
-        "هذا النظام ذكي، آمن، ويعمل بكامل طاقته.\n"
-        "──────────────────\n"
-        "💰 `/balance` - تقرير الأرصدة الفوري\n"
-        "📊 `/market` - نظرة سريعة على السوق\n"
-        "🔄 `/fix` - إعادة تنشيط الاتصال يدوياً"
-    )
-    bot.reply_to(message, welcome, parse_mode="Markdown")
+def start(message):
+    bot.reply_to(message, "🚀 النظام نشط الآن ومحمي من التعارض.")
 
 @bot.message_handler(commands=['balance'])
-def balance_cmd(message):
-    loading = bot.reply_to(message, "⏳ **جاري الاتصال الآمن بالمحفظة...**")
-    data = nasser_engine.get_data_safely()
-    
+def balance(message):
+    data = engine.get_balance()
     if data:
-        lines = [f"🔸 *{b['asset']}*: `{float(b['free']):.4f}`" for b in data]
-        res = "💰 **تقرير أرصدتك الحالي:**\n\n" + "\n".join(lines)
-        bot.edit_message_text(res, message.chat.id, loading.message_id, parse_mode="Markdown")
+        res = "💰 **أرصدتك الحالية:**\n\n" + "\n".join([f"🔹 {b['asset']}: {b['free']}" for b in data])
+        bot.reply_to(message, res, parse_mode="Markdown")
     else:
-        bot.edit_message_text("❌ **فشل الاتصال:** السيرفر لم يستطع الوصول لبينانس. تأكد من صلاحيات API Key.", message.chat.id, loading.message_id)
+        bot.reply_to(message, "⚠️ فشل جلب البيانات، تأكد من مفاتيح API.")
 
-@bot.message_handler(commands=['market'])
-def market_cmd(message):
-    try:
-        prices = nasser_engine.client.get_all_tickers()
-        coins = {"BTCUSDT": "₿", "ETHUSDT": "Ξ", "BNBUSDT": "🔶"}
-        output = "📊 **أهم أسعار السوق الآن:**\n\n"
-        for p in prices:
-            if p['symbol'] in coins:
-                output += f"{coins[p['symbol']]} *{p['symbol']}*: `${float(p['price']):,.2f}`\n"
-        bot.reply_to(message, output, parse_mode="Markdown")
-    except:
-        bot.reply_to(message, "⚠️ فشل جلب الأسعار، جرب ثانية خلال لحظات.")
-
-@bot.message_handler(commands=['fix'])
-def fix_cmd(message):
-    nasser_engine.client = nasser_engine.refresh_connection()
-    bot.reply_to(message, "🔄 تم إعادة ضبط المحرك بنجاح!")
-
-# ==========================================
-# [5] محرك الاستمرارية المطلقة (Auto-Restart)
-# ==========================================
-def bot_polling():
+# 5. الحل النهائي لمشكلة التعارض (Anti-Conflict)
+def run_bot_safe():
     while True:
         try:
-            bot.remove_webhook() # حل مشكلة Conflict 409 نهائياً
-            bot.infinity_polling(timeout=90, long_polling_timeout=45)
+            # السطر التالي هو الأهم لحل مشكلة Error 409
+            bot.remove_webhook() 
+            bot.infinity_polling(timeout=60, long_polling_timeout=30)
         except Exception:
-            time.sleep(10) # انتظار قليل قبل إعادة التشغيل في حال انقطاع الإنترنت
+            time.sleep(10) # انتظار قبل إعادة التشغيل تلقائياً
 
 if __name__ == "__main__":
-    # تشغيل البوت في مسار معالجة مستقل
-    threading.Thread(target=bot_polling, daemon=True).start()
-    st.write("🛰️ **السيرفر يبث الآن بنجاح.. الأنظمة مستقرة.**")
+    threading.Thread(target=run_bot_safe, daemon=True).start()
+    st.info("🛰️ السيرفر يبث الآن بنجاح.")
