@@ -1,135 +1,124 @@
 import os
 import time
-import logging
 import threading
-from datetime import datetime
 import telebot
+from telebot import types
 from binance.client import Client
-from binance.exceptions import BinanceAPIException, BinanceRequestException
-import streamlit as st
+import pandas as pd
+import pandas_ta as ta
 
-# --- 1. إعداد نظام المراقبة (Logging) ---
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# --- 1. الإعدادات والربط ---
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
+CHAT_ID = os.getenv("CHAT_ID") # تأكد من إضافته في Render
 
-# --- 2. جلب الإعدادات بأمان ---
-class Config:
-    TOKEN = os.getenv("TELEGRAM_TOKEN")
-    BINANCE_KEY = os.getenv("BINANCE_API_KEY")
-    BINANCE_SECRET = os.getenv("BINANCE_API_SECRET")
-    # التأكد من وجود المفاتيح
-    @classmethod
-    def validate(cls):
-        return all([cls.TOKEN, cls.BINANCE_KEY, cls.BINANCE_SECRET])
+bot = telebot.TeleBot(TOKEN)
+client = Client(API_KEY, API_SECRET)
 
-# --- 3. إدارة الاتصالات (The Core Engine) ---
-class NasserBotSystem:
-    def __init__(self):
-        self.bot = telebot.TeleBot(Config.TOKEN, threaded=True, num_threads=4)
-        self.binance_client = None
-        self.is_running = False
-        self._initialize_binance()
-        self._setup_handlers()
+# ذاكرة النظام الذكية
+state = {
+    "is_active": True,  # التداول مفعل تلقائياً عند البدء
+    "symbol": "BTCUSDT",
+    "amount_usd": 15.0, # المبلغ الافتراضي
+    "position": None,   # لمتابعة إذا كان هناك صفقة مفتوحة
+    "last_price": 0.0
+}
 
-    def _initialize_binance(self):
-        """ربط ذكي مع بينانس مع محاولات إعادة الاتصال"""
-        try:
-            self.binance_client = Client(Config.BINANCE_KEY, Config.BINANCE_SECRET)
-            # اختبار الاتصال الفعلي
-            self.binance_client.get_account_status()
-            logger.info("✅ تم الاتصال بنظام بينانس بنجاح.")
-        except Exception as e:
-            logger.error(f"❌ فشل ربط بينانس: {str(e)}")
-            self.binance_client = None
-
-    def _setup_handlers(self):
-        """تعريف الأوامر الاحترافية"""
-        
-        @self.bot.message_handler(commands=['start', 'help'])
-        def handle_start(message):
-            welcome_text = (
-                "🛡️ **نظام ناصر الاحترافي V3.0**\n\n"
-                "• الحالة: `متصل ونشط` ✅\n"
-                "• الربط المالي: " + ("`مفعل` 🟢" if self.binance_client else "`معطل` 🔴") + "\n\n"
-                "**الأوامر المتاحة:**\n"
-                "💰 `/balance` - عرض أرصدة المحفظة الحقيقية\n"
-                "📊 `/price BTCUSDT` - سعر أي عملة فوراً\n"
-                "⚙️ `/status` - فحص صحة النظام"
-            )
-            self.bot.reply_to(message, welcome_text, parse_mode='Markdown')
-
-        @self.bot.message_handler(commands=['balance'])
-        def handle_balance(message):
-            if not self.binance_client:
-                self.bot.reply_to(message, "❌ خطأ: لم يتم ضبط مفاتيح بينانس بشكل صحيح في Render.")
-                return
-            
+# --- 2. العقل التحليلي (Trading Engine) ---
+def trading_engine():
+    print("🚀 انطلاق العقل التحليلي لنظام ناصر...")
+    while True:
+        if state["is_active"]:
             try:
-                msg = self.bot.reply_to(message, "🔍 جاري فحص المحفظة...")
-                account = self.binance_client.get_account()
-                balances = [b for b in account['balances'] if float(b['free']) > 0 or float(b['locked']) > 0]
+                # جلب بيانات السوق (شموع 15 دقيقة للتحليل المتوسط)
+                bars = client.get_klines(symbol=state["symbol"], interval=Client.KLINE_INTERVAL_15MINUTE, limit=100)
+                df = pd.DataFrame(bars, columns=['time', 'open', 'high', 'low', 'close', 'vol', 'ct', 'qv', 'nt', 'tb', 'tv', 'i'])
+                df['close'] = df['close'].astype(float)
+
+                # مؤشرات احترافية: RSI (لقوة الاتجاه) و EMA (لاتجاه السعر)
+                df['rsi'] = ta.rsi(df['close'], length=14)
+                df['ema'] = ta.ema(df['close'], length=20)
                 
-                response = "💰 **أرصدة محفظتك:**\n\n"
-                for crypto in balances:
-                    total = float(crypto['free']) + float(crypto['locked'])
-                    response += f"• **{crypto['asset']}**: `{total:.4f}`\n"
+                current_rsi = df['rsi'].iloc[-1]
+                current_price = df['close'].iloc[-1]
+                ema_price = df['ema'].iloc[-1]
+
+                # --- منطق التداول الآلي الذكي ---
                 
-                self.bot.edit_message_text(response, message.chat.id, msg.message_id, parse_mode='Markdown')
+                # حالة الشراء: إذا كان السعر فوق المتوسط و RSI منخفض (فرصة ذهبية)
+                if state["position"] is None and current_rsi < 35 and current_price > ema_price:
+                    execute_buy(current_price, current_rsi)
+
+                # حالة البيع: إذا حققنا ربحاً أو وصل RSI لمنطقة تشبع (70+)
+                elif state["position"] == "BUY" and (current_rsi > 70 or current_price > state["buy_price"] * 1.02):
+                    execute_sell(current_price, current_rsi)
+
             except Exception as e:
-                self.bot.reply_to(message, f"⚠️ خطأ أثناء جلب البيانات: {str(e)}")
-
-    def run(self):
-        """تشغيل احترافي مع معالجة تعارض 409 تلقائياً"""
-        if self.is_running: return
-        self.is_running = True
+                print(f"⚠️ تنبيه النظام: {e}")
         
-        # أهم خطوة للمحترفين: تنظيف المسار قبل الانطلاق
-        try:
-            self.bot.remove_webhook()
-            time.sleep(1)
-        except: pass
+        time.sleep(30) # فحص السوق كل 30 ثانية بدون توقف
 
-        def poll():
-            while True:
-                try:
-                    logger.info("🚀 بدأت عملية الاستماع (Polling)...")
-                    self.bot.infinity_polling(timeout=10, long_polling_timeout=5)
-                except Exception as e:
-                    logger.error(f"🔄 إعادة تشغيل تلقائية بسبب خطأ: {e}")
-                    time.sleep(5)
+def execute_buy(price, rsi):
+    try:
+        msg = f"🟢 **قرار شراء آلي (قوي)**\n💰 السعر: `{price}`\n📊 RSI: `{rsi:.2f}`\n💵 المبلغ: `{state['amount_usd']}$`"
+        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+        state["position"] = "BUY"
+        state["buy_price"] = price
+        # تفعيل الأمر الحقيقي:
+        # client.order_market_buy(symbol=state["symbol"], quoteOrderQty=state["amount_usd"])
+    except Exception as e:
+        bot.send_message(CHAT_ID, f"❌ فشل تنفيذ الشراء: {e}")
 
-        threading.Thread(target=poll, daemon=True).start()
+def execute_sell(price, rsi):
+    try:
+        profit = ((price - state["buy_price"]) / state["buy_price"]) * 100
+        msg = f"🔴 **قرار بيع آلي (جني أرباح)**\n💰 السعر: `{price}`\n📈 الربح: `%{profit:.2f}`\n📊 RSI: `{rsi:.2f}`"
+        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+        state["position"] = None
+        # تفعيل الأمر الحقيقي:
+        # client.order_market_sell(symbol=state["symbol"], quantity=...)
+    except Exception as e:
+        bot.send_message(CHAT_ID, f"❌ فشل تنفيذ البيع: {e}")
 
-# --- 4. واجهة العرض والتحكم (Streamlit Interface) ---
-def main():
-    st.set_page_config(page_title="Nasser Pro System", page_icon="⚡")
+# --- 3. واجهة التحكم في تليجرام ---
+@bot.message_handler(commands=['start', 'status'])
+def send_status(message):
+    status = "نشط ⚡" if state["is_active"] else "متوقف 💤"
+    msg = (f"🛡️ **نظام ناصر للتداول المستقل**\n\n"
+           f"• الحالة: `{status}`\n"
+           f"• المبلغ لكل صفقة: `{state['amount_usd']}$`\n"
+           f"• العملة الحالية: `{state['symbol']}`\n"
+           f"• الوضع الحالي: `{'في صفقة' if state['position'] else 'بحث عن فرصة'}`")
     
-    if not Config.validate():
-        st.error("🚨 نقص في إعدادات البيئة (Environment Variables)! تأكد من إضافة TOKEN و API Keys في Render.")
-        return
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🟢 تشغيل", callback_data="on"), 
+               types.InlineKeyboardButton("🔴 إيقاف", callback_data="off"))
+    bot.reply_to(message, msg, reply_markup=markup, parse_mode="Markdown")
 
-    # استخدام Session State لضمان عدم تكرار تشغيل البوت عند تحديث الصفحة
-    if 'system' not in st.session_state:
-        st.session_state.system = NasserBotSystem()
-        st.session_state.system.run()
-        st.session_state.start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    if call.data == "on":
+        state["is_active"] = True
+        bot.answer_callback_query(call.id, "بدأ التداول الآلي")
+        bot.edit_message_text("✅ النظام الآن يحلل ويتداول بشكل دائم...", call.message.chat.id, call.message.message_id)
+    elif call.data == "off":
+        state["is_active"] = False
+        bot.answer_callback_query(call.id, "توقف التداول")
+        bot.edit_message_text("🛑 تم إيقاف النظام عن العمل.", call.message.chat.id, call.message.message_id)
 
-    st.title("⚡ نظام ناصر الذكي V3")
-    st.write(f"⏱️ وقت البدء: `{st.session_state.start_time}`")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("حالة التليجرام", "نشط ✅")
-    with col2:
-        status = "متصل ✅" if st.session_state.system.binance_client else "فشل الاتصال ❌"
-        st.metric("ربط بينانس", status)
+@bot.message_handler(commands=['set_amount'])
+def set_amount(message):
+    try:
+        amt = float(message.text.split()[1])
+        state["amount_usd"] = amt
+        bot.reply_to(message, f"✅ تم تحديد مبلغ التداول بـ `{amt}$` لكل صفقة.")
+    except:
+        bot.reply_to(message, "⚠️ استخدم: `/set_amount 50` لتحديد المبلغ.")
 
-    st.divider()
-    st.subheader("📝 سجل العمليات الأخير")
-    st.info("النظام يعمل الآن في الخلفية. يمكنك إرسال الأوامر عبر التليجرام مباشرة.")
-
+# --- 4. نظام التشغيل اللانهائي ---
 if __name__ == "__main__":
-    main()
+    # تشغيل محرك التداول في مسار مستقل
+    t = threading.Thread(target=trading_engine, daemon=True)
+    t.start()
+    bot.infinity_polling()
