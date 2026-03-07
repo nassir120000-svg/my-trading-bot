@@ -2,3 +2,5 @@ streamlit
 pyTelegramBotAPI
 requests
 python-binance
+pandas
+pandas_ta
