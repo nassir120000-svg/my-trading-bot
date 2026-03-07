@@ -2,60 +2,52 @@ import os
 import time
 import threading
 import telebot
-from binance.client import Client
+import ccxt # المكتبة العالمية القوية
 import pandas as pd
-import ta 
+import ta
 
-# --- إعدادات البيئة ---
+# الإعدادات
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 CHAT_ID = os.getenv("CHAT_ID")
 
 bot = telebot.TeleBot(TOKEN)
-client = Client(API_KEY, API_SECRET)
 
-# ذاكرة النظام
-state = {"active": True, "pos": None, "buy_p": 0.0, "symbol": "BTCUSDT"}
+# إعداد الربط مع بينانس باستخدام CCXT لتجنب مشاكل الموقع
+exchange = ccxt.binance({
+    'apiKey': API_KEY,
+    'secret': API_SECRET,
+    'enableRateLimit': True,
+    'options': {'adjustForTimeDifference': True}
+})
 
-def trading_brain():
-    print("🚀 انطلاق العقل التحليلي الاحترافي...")
+def trading_engine():
+    print("🚀 انطلاق المحرك المطور لتخطي الحظر...")
     while True:
-        if state["active"]:
-            try:
-                # جلب البيانات (شمعة 15 دقيقة)
-                bars = client.get_klines(symbol=state["symbol"], interval="15m", limit=100)
-                df = pd.DataFrame(bars, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qv', 'n', 'tb', 'tv', 'i'])
-                df['c'] = df['c'].astype(float)
-                
-                # حساب RSI (مؤشر القوة النسبية) - نسخة خفيفة ومستقرة
-                rsi_indicator = ta.momentum.RSIIndicator(close=df['c'], window=14)
-                rsi = rsi_indicator.rsi().iloc[-1]
-                price = df['c'].iloc[-1]
+        try:
+            # جلب البيانات بطريقة CCXT المستقرة
+            ohlcv = exchange.fetch_ohlcv('BTC/USDT', timeframe='15m', limit=100)
+            df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # حساب RSI
+            df['rsi'] = ta.momentum.rsi(df['close'], window=14)
+            rsi = df['rsi'].iloc[-1]
+            price = df['close'].iloc[-1]
 
-                # --- منطق التداول الآلي ---
-                # 🟢 شراء: إذا كان السعر "متشبع بيعياً" (RSI تحت 30)
-                if state["pos"] is None and rsi < 30:
-                    msg = f"🟢 **قرار شراء آلي**\n💰 السعر: `{price}`\n📊 RSI: `{rsi:.2f}`"
-                    bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                    state["pos"] = "BUY"
-                    state["buy_p"] = price
+            if rsi < 30:
+                bot.send_message(CHAT_ID, f"🟢 **إشارة شراء**\nالسعر: `{price}`\nRSI: `{rsi:.2f}`")
+            elif rsi > 70:
+                bot.send_message(CHAT_ID, f"🔴 **إشارة بيع**\nالسعر: `{price}`")
 
-                # 🔴 بيع: إذا كان السعر "متشبع شرائياً" (RSI فوق 70) أو ربح 2%
-                elif state["pos"] == "BUY":
-                    profit = ((price - state["buy_p"]) / state["buy_p"]) * 100
-                    if rsi > 70 or profit >= 2.0:
-                        msg = f"🔴 **قرار بيع آلي**\n💰 السعر: `{price}`\n📈 الربح: `%{profit:.2f}`"
-                        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                        state["pos"] = None
-
-            except Exception as e:
-                print(f"⚠️ تنبيه النظام: {e}")
+        except Exception as e:
+            print(f"⚠️ تنبيه الاتصال: {e}")
+            # إذا استمر الحظر، سنخبرك فوراً
+            if "restricted" in str(e).lower():
+                 print("🚨 لا يزال بينانس يحظر هذا السيرفر.")
         
-        time.sleep(30) # فحص كل 30 ثانية لضمان الاستقرار
+        time.sleep(60)
 
 if __name__ == "__main__":
-    # تشغيل المحرك في مسار مستقل لضمان عدم توقف التليجرام
-    threading.Thread(target=trading_brain, daemon=True).start()
-    print("🤖 البوت متصل الآن بنجاح...")
+    threading.Thread(target=trading_engine, daemon=True).start()
     bot.infinity_polling()
