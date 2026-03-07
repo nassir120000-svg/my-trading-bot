@@ -1,4 +1,4 @@
 pyTelegramBotAPI
-python-binance
+ccxt
 pandas
 ta
